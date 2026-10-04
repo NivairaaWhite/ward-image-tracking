@@ -18,6 +18,7 @@ Ward intentionally requests only exact matches (not visual/similar results)
 and derives a confidence score from each match's ranking position, since
 SerpApi does not return an explicit confidence value.
 """
+
 from __future__ import annotations
 
 import io
@@ -31,16 +32,17 @@ log = logging.getLogger(__name__)
 
 SERPAPI_IMAGE_UPLOAD_URL = "https://serpapi.com/image"
 SERPAPI_SEARCH_URL = "https://serpapi.com/search.json"
+
 MAX_UPLOAD_BYTES = 500 * 1024  # SerpApi's documented Image API limit
 MAX_UPLOAD_DIMENSION = 2048
 REQUEST_TIMEOUT = 30
+
 
 # Rank-based confidence: position 1 → 100, then steps down by 7 points
 # each rank, floored at 15. This is an approximate relevance signal based
 # on Google Lens ordering, not a calibrated probability.
 def _confidence_from_position(position: int) -> int:
-    if position < 1:
-        position = 1
+    position = max(position, 1)
     return max(15, 100 - (position - 1) * 7)
 
 
@@ -77,6 +79,7 @@ def _compress_for_upload(image: Image.Image) -> bytes:
     """
     rgb = ImageOps.exif_transpose(image).convert("RGB")
     rgb.thumbnail((MAX_UPLOAD_DIMENSION, MAX_UPLOAD_DIMENSION))
+
     for _ in range(8):
         for quality in (85, 75, 65, 55):
             buf = io.BytesIO()
@@ -86,6 +89,7 @@ def _compress_for_upload(image: Image.Image) -> bytes:
         rgb = rgb.resize(
             (max(1, int(rgb.width * 0.8)), max(1, int(rgb.height * 0.8))), Image.LANCZOS
         )
+
     raise TrackerError("Could not shrink this image under SerpApi's 500 KB upload limit.")
 
 
@@ -113,6 +117,7 @@ def _upload_image(image_bytes: bytes, api_key: str) -> str:
     data = _json(resp)
     if "error" in data:
         raise TrackerError(f"SerpApi rejected the image upload: {data['error']}")
+
     image_id = data.get("image_id")
     if not image_id:
         raise TrackerError("SerpApi did not return an image_id for the upload.")
@@ -125,17 +130,21 @@ def _parse_exact_matches(data: dict) -> SearchResult:
 
     matches: list[Match] = []
     seen: set[str] = set()
+
     for m in data.get("exact_matches", []) or []:
         link = (m.get("link") or "").strip()
         if not link or link in seen:  # unusable or repeated within one result set
             continue
         seen.add(link)
+
         try:
             position = int(m.get("position") or 0)
         except (TypeError, ValueError):
             position = 0
+
         if position < 1:
             position = len(matches) + 1
+
         matches.append(
             Match(
                 title=m.get("title", "") or "",
@@ -147,6 +156,7 @@ def _parse_exact_matches(data: dict) -> SearchResult:
                 confidence=_confidence_from_position(position),
             )
         )
+
     # Keep highest-confidence (lowest position) first
     matches.sort(key=lambda x: x.position)
     return SearchResult(matches=matches)
